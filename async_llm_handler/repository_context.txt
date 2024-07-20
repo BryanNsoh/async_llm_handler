@@ -1,0 +1,547 @@
+<repository_structure>
+<directory name="async_llm_handler">
+    <file>
+        <name>.gitignore</name>
+        <path>.gitignore</path>
+        <content>Full content not provided</content>
+    </file>
+    <file>
+        <name>config.py</name>
+        <path>config.py</path>
+        <content>
+# File: async_llm_handler/config.py
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class Config:
+    def __init__(self):
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
+        self.claude_api_key = os.getenv("CLAUDE_API_KEY")
+        self.openai_api_key = os.getenv("OPENAI_API_KEY")
+        self.cohere_api_key = os.getenv("COHERE_API_KEY")
+        self.groq_api_key = os.getenv("GROQ_API_KEY")
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+        </content>
+    </file>
+    <file>
+        <name>exceptions.py</name>
+        <path>exceptions.py</path>
+        <content>
+# File: async_llm_handler/exceptions.py
+
+class LLMAPIError(Exception):
+    """Exception raised for errors in the LLM API."""
+    pass
+        </content>
+    </file>
+    <file>
+        <name>handler.py</name>
+        <path>handler.py</path>
+        <content>
+# File: async_llm_handler/handler.py
+
+import asyncio
+from typing import Optional
+from concurrent.futures import ThreadPoolExecutor
+import anthropic
+import cohere
+import google.generativeai as genai
+from groq import Groq
+from openai import AsyncOpenAI
+
+from .config import Config
+from .exceptions import LLMAPIError
+from .utils.rate_limiter import RateLimiter
+from .utils.token_utils import clip_prompt
+from .utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+class LLMHandler:
+    def __init__(self, config: Optional[Config] = None):
+        self.config = config or Config()
+        self._setup_clients()
+        self._setup_rate_limiters()
+        self._loop = asyncio.get_event_loop() if asyncio.get_event_loop().is_running() else None
+        self._executor = ThreadPoolExecutor()
+
+    def _setup_clients(self):
+        genai.configure(api_key=self.config.gemini_api_key)
+        self.gemini_client = genai.GenerativeModel(
+            "gemini-1.5-flash-latest",
+            safety_settings=[
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+            ],
+            generation_config={"response_mime_type": "application/json"},
+        )
+        self.claude_client = anthropic.Anthropic(api_key=self.config.claude_api_key)
+        self.cohere_client = cohere.Client(self.config.cohere_api_key)
+        self.groq_client = Groq(api_key=self.config.groq_api_key)
+        self.openai_client = AsyncOpenAI(api_key=self.config.openai_api_key)
+
+    def _setup_rate_limiters(self):
+        self.rate_limiters = {
+            'gemini': RateLimiter(30, 60),
+            'claude': RateLimiter(5, 60),
+            'openai': RateLimiter(5, 60),
+            'cohere': RateLimiter(30, 60),
+            'llama': RateLimiter(5, 60)
+        }
+
+    def query(self, prompt: str, model: str = 'auto') -> str:
+        if self._loop and self._loop.is_running():
+            return asyncio.run_coroutine_threadsafe(self._async_query(prompt, model), self._loop).result()
+        else:
+            return asyncio.run(self._async_query(prompt, model))
+
+    async def _async_query(self, prompt: str, model: str = 'auto') -> str:
+        if model == 'auto':
+            return await self._query_all(prompt)
+        
+        method = getattr(self, f'_query_{model}', None)
+        if not method:
+            raise ValueError(f"Unsupported model: {model}")
+        
+        return await method(prompt)
+
+    async def _query_all(self, prompt: str) -> str:
+        methods = [
+            self._query_gemini,
+            self._query_cohere,
+            self._query_llama,
+            self._query_claude,
+            self._query_openai
+        ]
+        
+        for method in methods:
+            try:
+                return await method(prompt)
+            except LLMAPIError:
+                continue
+        
+        raise LLMAPIError("All LLM APIs failed to respond")
+
+    async def _query_gemini(self, prompt: str) -> str:
+        async with self.rate_limiters['gemini']:
+            try:
+                clipped_prompt = clip_prompt(prompt, max_tokens=500000)
+                logger.info("Generating content with Gemini API.")
+                response = await self.gemini_client.generate_content_async(clipped_prompt)
+                if response.candidates:
+                    return response.candidates[0].content.parts[0].text
+                else:
+                    raise ValueError("Invalid response format from Gemini API.")
+            except Exception as e:
+                logger.error(f"Error with Gemini API: {e}")
+                raise LLMAPIError(f"Gemini API error: {str(e)}")
+
+    async def _query_cohere(self, prompt: str) -> str:
+        async with self.rate_limiters['cohere']:
+            try:
+                clipped_prompt = clip_prompt(prompt, max_tokens=100000)
+                response = self.cohere_client.chat(message=clipped_prompt, model="command-r")
+                return response.text
+            except Exception as e:
+                logger.error(f"Error with Cohere API: {e}")
+                raise LLMAPIError(f"Cohere API error: {str(e)}")
+
+    async def _query_openai(self, prompt: str) -> str:
+        async with self.rate_limiters['openai']:
+            try:
+                messages = [{"role": "user", "content": prompt}]
+                response = await self.openai_client.chat.completions.create(
+                    model="gpt-4",
+                    messages=messages,
+                    temperature=0.3,
+                    max_tokens=None,
+                    top_p=1,
+                    frequency_penalty=0,
+                    presence_penalty=0,
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.error(f"Error with OpenAI API: {e}")
+                raise LLMAPIError(f"OpenAI API error: {str(e)}")
+
+    async def _query_claude(self, prompt: str) -> str:
+        async with self.rate_limiters['claude']:
+            try:
+                clipped_prompt = clip_prompt(prompt, max_tokens=180000)
+                response = self.claude_client.messages.create(
+                    model="claude-3-haiku-20240307",
+                    max_tokens=3000,
+                    system="Directly fulfill the user's request without preamble, paying very close attention to all nuances of their instructions.",
+                    messages=[{"role": "user", "content": clipped_prompt}],
+                )
+                return response.content[0].text
+            except Exception as e:
+                logger.error(f"Error with Claude API: {e}")
+                raise LLMAPIError(f"Claude API error: {str(e)}")
+
+    async def _query_llama(self, prompt: str) -> str:
+        async with self.rate_limiters['llama']:
+            try:
+                clipped_prompt = clip_prompt(prompt, max_tokens=8192)
+                logger.info("Generating content with Groq API.")
+                response = self.groq_client.chat.completions.create(
+                    messages=[{"role": "user", "content": clipped_prompt}],
+                    model="llama3-8b-8192",
+                )
+                if response.choices:
+                    return response.choices[0].message.content
+                else:
+                    raise ValueError("Invalid response format from Groq API.")
+            except Exception as e:
+                logger.error(f"Error with Groq API: {e}")
+                raise LLMAPIError(f"Groq API error: {str(e)}")
+        </content>
+    </file>
+    <file>
+        <name>pyproject.toml</name>
+        <path>pyproject.toml</path>
+        <content>Full content not provided</content>
+    </file>
+    <file>
+        <name>README.md</name>
+        <path>README.md</path>
+        <content>Full content not provided</content>
+    </file>
+    <file>
+        <name>repo_context_extractor.py</name>
+        <path>repo_context_extractor.py</path>
+        <content>
+import os
+
+EXCLUDED_DIRS = {".git", "__pycache__", "node_modules", ".venv"}
+FULL_CONTENT_EXTENSIONS = {".py", ".txt", ".dbml", ".yaml"}
+
+def create_file_element(file_path, root_folder):
+    relative_path = os.path.relpath(file_path, root_folder)
+    file_name = os.path.basename(file_path)
+    file_extension = os.path.splitext(file_name)[1]
+
+    file_element = [
+        f"    <file>\n        <name>{file_name}</name>\n        <path>{relative_path}</path>\n"
+    ]
+
+    if file_extension in FULL_CONTENT_EXTENSIONS:
+        file_element.append("        <content>\n")
+        try:
+            with open(file_path, "r", encoding="utf-8") as file:
+                file_element.append(file.read())
+        except UnicodeDecodeError:
+            file_element.append("Binary or non-UTF-8 content not displayed")
+        file_element.append("\n        </content>\n")
+    else:
+        file_element.append("        <content>Full content not provided</content>\n")
+
+    file_element.append("    </file>\n")
+    return "".join(file_element)
+
+def get_repo_structure(root_folder):
+    structure = ["<repository_structure>\n"]
+
+    for subdir, dirs, files in os.walk(root_folder):
+        dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
+        level = subdir.replace(root_folder, "").count(os.sep)
+        indent = " " * 4 * level
+        relative_subdir = os.path.relpath(subdir, root_folder)
+
+        structure.append(f'{indent}<directory name="{os.path.basename(subdir)}">\n')
+        for file in files:
+            file_path = os.path.join(subdir, file)
+            file_element = create_file_element(file_path, root_folder)
+            structure.append(file_element)
+        structure.append(f"{indent}</directory>\n")
+
+    structure.append("</repository_structure>\n")
+    return "".join(structure)
+
+def main():
+    root_folder = os.getcwd()  # Use the current working directory
+    output_file = os.path.join(root_folder, "repository_context.txt")
+
+    # Delete the previous output file if it exists
+    if os.path.exists(output_file):
+        os.remove(output_file)
+        print(f"Deleted previous {output_file}")
+
+    repo_structure = get_repo_structure(root_folder)
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(repo_structure)
+
+    print(f"Fresh repository context has been extracted to {output_file}")
+
+if __name__ == "__main__":
+    main()
+        </content>
+    </file>
+    <file>
+        <name>__init__.py</name>
+        <path>__init__.py</path>
+        <content>
+# File: async_llm_handler/__init__.py
+
+from .handler import LLMHandler
+from .config import Config
+
+__all__ = ['LLMHandler', 'Config']
+__version__ = "0.1.0"
+        </content>
+    </file>
+</directory>
+    <directory name="examples">
+    <file>
+        <name>async_example.py</name>
+        <path>examples\async_example.py</path>
+        <content>
+# File: async_llm_handler/examples/async_example.py
+
+import asyncio
+from async_llm_handler import LLMHandler
+
+async def main():
+    handler = LLMHandler()
+    
+    prompt = "What is the meaning of life?"
+    response = await handler._async_query(prompt)
+    print(f"Response: {response}")
+
+    # Using multiple models concurrently
+    tasks = [
+        handler._async_query(prompt, model='gemini'),
+        handler._async_query(prompt, model='openai'),
+        handler._async_query(prompt, model='claude')
+    ]
+    responses = await asyncio.gather(*tasks)
+    
+    for i, response in enumerate(responses):
+        print(f"Response {i+1}: {response}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+        </content>
+    </file>
+    <file>
+        <name>sync_example.py</name>
+        <path>examples\sync_example.py</path>
+        <content>
+# File: async_llm_handler/examples/sync_example.py
+
+from async_llm_handler import LLMHandler
+
+def main():
+    handler = LLMHandler()
+    
+    prompt = "What is the meaning of life?"
+    response = handler.query(prompt)
+    print(f"Response: {response}")
+
+    # Using a specific model
+    response_openai = handler.query(prompt, model='openai')
+    print(f"OpenAI Response: {response_openai}")
+
+if __name__ == "__main__":
+    main()
+        </content>
+    </file>
+    </directory>
+    <directory name="tests">
+    <file>
+        <name>test_handler.py</name>
+        <path>tests\test_handler.py</path>
+        <content>
+# File: async_llm_handler/tests/test_handler.py
+
+import pytest
+from async_llm_handler import LLMHandler, Config
+from async_llm_handler.exceptions import LLMAPIError
+
+@pytest.fixture
+def handler():
+    return LLMHandler()
+
+def test_query(handler):
+    response = handler.query("Test prompt")
+    assert isinstance(response, str)
+    assert len(response) > 0
+
+@pytest.mark.asyncio
+async def test_async_query(handler):
+    response = await handler._async_query("Test prompt")
+    assert isinstance(response, str)
+    assert len(response) > 0
+
+def test_invalid_model(handler):
+    with pytest.raises(ValueError):
+        handler.query("Test prompt", model="invalid_model")
+
+@pytest.mark.asyncio
+async def test_all_apis_fail(monkeypatch):
+    def mock_api_error(*args, **kwargs):
+        raise LLMAPIError("API Error")
+
+    handler = LLMHandler()
+    for model in ['gemini', 'cohere', 'llama', 'claude', 'openai']:
+        monkeypatch.setattr(handler, f'_query_{model}', mock_api_error)
+
+    with pytest.raises(LLMAPIError, match="All LLM APIs failed to respond"):
+        await handler._async_query("Test prompt")
+        </content>
+    </file>
+    <file>
+        <name>test_utils.py</name>
+        <path>tests\test_utils.py</path>
+        <content>
+# File: async_llm_handler/tests/test_utils.py
+
+import pytest
+from async_llm_handler.utils import count_tokens, clip_prompt, RateLimiter
+
+def test_count_tokens():
+    text = "Hello, world!"
+    assert count_tokens(text) > 0
+
+def test_clip_prompt():
+    long_prompt = "This is a very long prompt " * 100
+    max_tokens = 10
+    clipped = clip_prompt(long_prompt, max_tokens)
+    assert count_tokens(clipped) <= max_tokens
+
+@pytest.mark.asyncio
+async def test_rate_limiter():
+    limiter = RateLimiter(rate=2, period=1)
+    
+    start_time = pytest.helpers.time()
+    
+    async with limiter:
+        pass
+    async with limiter:
+        pass
+    
+    # This should wait
+    async with limiter:
+        pass
+    
+    end_time = pytest.helpers.time()
+    
+    assert end_time - start_time >= 1.0
+
+def test_logger():
+    from async_llm_handler.utils import get_logger
+    logger = get_logger("test_logger")
+    assert logger.name == "test_logger"
+    assert logger.level == 20  # INFO level
+        </content>
+    </file>
+    <file>
+        <name>__init__.py</name>
+        <path>tests\__init__.py</path>
+        <content>
+# File: async_llm_handler/tests/__init__.py
+# This file can be left empty
+        </content>
+    </file>
+    </directory>
+    <directory name="utils">
+    <file>
+        <name>logger.py</name>
+        <path>utils\logger.py</path>
+        <content>
+# File: async_llm_handler/utils/logger.py
+
+import logging
+
+def get_logger(name):
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+    return logger
+        </content>
+    </file>
+    <file>
+        <name>rate_limiter.py</name>
+        <path>utils\rate_limiter.py</path>
+        <content>
+# File: async_llm_handler/utils/rate_limiter.py
+
+import asyncio
+import time
+
+class RateLimiter:
+    def __init__(self, rate: int, period: int = 60):
+        self.rate = rate
+        self.period = period
+        self.allowance = rate
+        self.last_check = time.monotonic()
+
+    async def __aenter__(self):
+        while True:
+            current = time.monotonic()
+            time_passed = current - self.last_check
+            self.last_check = current
+            self.allowance += time_passed * (self.rate / self.period)
+            if self.allowance > self.rate:
+                self.allowance = self.rate
+            if self.allowance < 1:
+                await asyncio.sleep(1)
+                continue
+            self.allowance -= 1
+            break
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        pass
+        </content>
+    </file>
+    <file>
+        <name>token_utils.py</name>
+        <path>utils\token_utils.py</path>
+        <content>
+# File: async_llm_handler/utils/token_utils.py
+
+import tiktoken
+
+def count_tokens(text, encoding_name="cl100k_base"):
+    encoding = tiktoken.get_encoding(encoding_name)
+    num_tokens = len(encoding.encode(text))
+    return num_tokens
+
+def clip_prompt(prompt, max_tokens, encoding_name="cl100k_base"):
+    encoding = tiktoken.get_encoding(encoding_name)
+    tokens = encoding.encode(prompt)
+    if len(tokens) > max_tokens:
+        clipped_tokens = tokens[:max_tokens]
+        clipped_prompt = encoding.decode(clipped_tokens)
+        return clipped_prompt
+    return prompt
+        </content>
+    </file>
+    <file>
+        <name>__init__.py</name>
+        <path>utils\__init__.py</path>
+        <content>
+# File: async_llm_handler/utils/__init__.py
+
+from .logger import get_logger
+from .rate_limiter import RateLimiter
+from .token_utils import count_tokens, clip_prompt
+
+__all__ = ['get_logger', 'RateLimiter', 'count_tokens', 'clip_prompt']
+        </content>
+    </file>
+    </directory>
+</repository_structure>
