@@ -1,41 +1,41 @@
 [build-system]
-   requires = ["hatchling"]
-   build-backend = "hatchling.build"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-   [project]
-   name = "async_llm_handler"
-   version = "0.1.0"
-   description = "An asynchronous handler for multiple LLM APIs"
-   readme = "README.md"
-   requires-python = ">=3.7"
-   license = "MIT"
-   keywords = ["llm", "api", "async", "nlp"]
-   authors = [
-     { name = "Bryan Nsoh", email = "bryan.anye.5@gmail.com" },
-   ]
-   dependencies = [
-     "anthropic",
-     "cohere",
-     "google-generativeai",
-     "groq",
-     "openai",
-     "python-dotenv",
-     "tiktoken",
-     "asyncio",
-   ]
+[project]
+name = "async_llm_handler"
+dynamic = ["version"]
+description = "An asynchronous handler for multiple LLM APIs"
+readme = "README.md"
+requires-python = ">=3.7"
+license = "MIT"
+keywords = ["llm", "api", "async", "nlp"]
+authors = [
+  { name = "Bryan Nsoh", email = "bryan.anye.5@gmail.com" },
+]
+dependencies = [
+  "anthropic",
+  "google-generativeai",
+  "openai",
+  "python-dotenv",
+  "tiktoken",
+  "asyncio",
+]
 
-   [project.optional-dependencies]
-   dev = [
-     "pytest",
-     "pytest-asyncio",
-   ]
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+]
 
-   [project.urls]
-   Homepage = "https://https://github.com/BryanNsoh/async_llm_handler"
+[project.urls]
+Homepage = "https://github.com/BryanNsoh/async_llm_handler"
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
-   [tool.pytest.ini_options]
-   asyncio_mode = "auto"
+[tool.hatch.build.targets.wheel]
+packages = ["async_llm_handler"]
 
-   [tool.hatch.build.targets.wheel]
-   packages = ["async_llm_handler"]
+[tool.hatch.version]
+path = "version.txt"
