@@ -1,7 +1,7 @@
 import os
 
 EXCLUDED_DIRS = {".git", "__pycache__", "node_modules", ".venv"}
-FULL_CONTENT_EXTENSIONS = {".py", ".txt", ".dbml", ".yaml"}
+FULL_CONTENT_EXTENSIONS = {".py", ".txt", ".dbml", ".yaml", ".toml", ".md"}
 
 def create_file_element(file_path, root_folder):
     relative_path = os.path.relpath(file_path, root_folder)
@@ -46,7 +46,7 @@ def get_repo_structure(root_folder):
     return "".join(structure)
 
 def main():
-    root_folder = os.getcwd()  # Use the current working directory
+    root_folder = r"C:\Users\bnsoh2\OneDrive - University of Nebraska-Lincoln\Documents\Projects\async_llm_handler"
     output_file = os.path.join(root_folder, "repository_context.txt")
 
     # Delete the previous output file if it exists
