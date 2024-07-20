@@ -1,13 +1,30 @@
 <repository_structure>
 <directory name="async_llm_handler">
     <file>
+        <name>.env</name>
+        <path>.env</path>
+        <content>Full content not provided</content>
+    </file>
+    <file>
+        <name>pyproject.toml</name>
+        <path>pyproject.toml</path>
+        <content>Full content not provided</content>
+    </file>
+    <file>
+        <name>README.md</name>
+        <path>README.md</path>
+        <content>Full content not provided</content>
+    </file>
+</directory>
+    <directory name="async_llm_handler">
+    <file>
         <name>.gitignore</name>
-        <path>.gitignore</path>
+        <path>async_llm_handler\.gitignore</path>
         <content>Full content not provided</content>
     </file>
     <file>
         <name>config.py</name>
-        <path>config.py</path>
+        <path>async_llm_handler\config.py</path>
         <content>
 # File: async_llm_handler/config.py
 
@@ -30,7 +47,7 @@ class Config:
     </file>
     <file>
         <name>exceptions.py</name>
-        <path>exceptions.py</path>
+        <path>async_llm_handler\exceptions.py</path>
         <content>
 # File: async_llm_handler/exceptions.py
 
@@ -41,7 +58,7 @@ class LLMAPIError(Exception):
     </file>
     <file>
         <name>handler.py</name>
-        <path>handler.py</path>
+        <path>async_llm_handler\handler.py</path>
         <content>
 # File: async_llm_handler/handler.py
 
@@ -205,18 +222,8 @@ class LLMHandler:
         </content>
     </file>
     <file>
-        <name>pyproject.toml</name>
-        <path>pyproject.toml</path>
-        <content>Full content not provided</content>
-    </file>
-    <file>
-        <name>README.md</name>
-        <path>README.md</path>
-        <content>Full content not provided</content>
-    </file>
-    <file>
         <name>repo_context_extractor.py</name>
-        <path>repo_context_extractor.py</path>
+        <path>async_llm_handler\repo_context_extractor.py</path>
         <content>
 import os
 
@@ -287,22 +294,22 @@ if __name__ == "__main__":
     </file>
     <file>
         <name>__init__.py</name>
-        <path>__init__.py</path>
+        <path>async_llm_handler\__init__.py</path>
         <content>
 # File: async_llm_handler/__init__.py
 
-from .handler import LLMHandler
-from .config import Config
+from async_llm_handler.handler import LLMHandler
+from async_llm_handler.config import Config
 
 __all__ = ['LLMHandler', 'Config']
 __version__ = "0.1.0"
         </content>
     </file>
-</directory>
-    <directory name="examples">
+    </directory>
+        <directory name="examples">
     <file>
         <name>async_example.py</name>
-        <path>examples\async_example.py</path>
+        <path>async_llm_handler\examples\async_example.py</path>
         <content>
 # File: async_llm_handler/examples/async_example.py
 
@@ -333,7 +340,7 @@ if __name__ == "__main__":
     </file>
     <file>
         <name>sync_example.py</name>
-        <path>examples\sync_example.py</path>
+        <path>async_llm_handler\examples\sync_example.py</path>
         <content>
 # File: async_llm_handler/examples/sync_example.py
 
@@ -354,13 +361,17 @@ if __name__ == "__main__":
     main()
         </content>
     </file>
-    </directory>
-    <directory name="tests">
+        </directory>
+        <directory name="tests">
     <file>
         <name>test_handler.py</name>
-        <path>tests\test_handler.py</path>
+        <path>async_llm_handler\tests\test_handler.py</path>
         <content>
 # File: async_llm_handler/tests/test_handler.py
+
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))
 
 import pytest
 from async_llm_handler import LLMHandler, Config
@@ -400,7 +411,7 @@ async def test_all_apis_fail(monkeypatch):
     </file>
     <file>
         <name>test_utils.py</name>
-        <path>tests\test_utils.py</path>
+        <path>async_llm_handler\tests\test_utils.py</path>
         <content>
 # File: async_llm_handler/tests/test_utils.py
 
@@ -445,17 +456,17 @@ def test_logger():
     </file>
     <file>
         <name>__init__.py</name>
-        <path>tests\__init__.py</path>
+        <path>async_llm_handler\tests\__init__.py</path>
         <content>
 # File: async_llm_handler/tests/__init__.py
 # This file can be left empty
         </content>
     </file>
-    </directory>
-    <directory name="utils">
+        </directory>
+        <directory name="utils">
     <file>
         <name>logger.py</name>
-        <path>utils\logger.py</path>
+        <path>async_llm_handler\utils\logger.py</path>
         <content>
 # File: async_llm_handler/utils/logger.py
 
@@ -474,7 +485,7 @@ def get_logger(name):
     </file>
     <file>
         <name>rate_limiter.py</name>
-        <path>utils\rate_limiter.py</path>
+        <path>async_llm_handler\utils\rate_limiter.py</path>
         <content>
 # File: async_llm_handler/utils/rate_limiter.py
 
@@ -509,7 +520,7 @@ class RateLimiter:
     </file>
     <file>
         <name>token_utils.py</name>
-        <path>utils\token_utils.py</path>
+        <path>async_llm_handler\utils\token_utils.py</path>
         <content>
 # File: async_llm_handler/utils/token_utils.py
 
@@ -532,7 +543,7 @@ def clip_prompt(prompt, max_tokens, encoding_name="cl100k_base"):
     </file>
     <file>
         <name>__init__.py</name>
-        <path>utils\__init__.py</path>
+        <path>async_llm_handler\utils\__init__.py</path>
         <content>
 # File: async_llm_handler/utils/__init__.py
 
@@ -543,5 +554,5 @@ from .token_utils import count_tokens, clip_prompt
 __all__ = ['get_logger', 'RateLimiter', 'count_tokens', 'clip_prompt']
         </content>
     </file>
-    </directory>
+        </directory>
 </repository_structure>
