@@ -1,0 +1,44 @@
+# File: async_llm_handler/pyproject.toml
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "async_llm_handler"
+version = "0.1.0"
+description = "An asynchronous handler for multiple LLM APIs"
+readme = "README.md"
+requires-python = ">=3.7"
+license = "MIT"
+keywords = ["llm", "api", "async", "nlp"]
+authors = [
+  { name = "Your Name", email = "your.email@example.com" },
+]
+dependencies = [
+  "anthropic",
+  "cohere",
+  "google-generativeai",
+  "groq",
+  "openai",
+  "python-dotenv",
+  "tiktoken",
+  "asyncio",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/async_llm_handler"
+Repository = "https://github.com/yourusername/async_llm_handler.git"
+"Bug Tracker" = "https://github.com/yourusername/async_llm_handler/issues"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.hatch.build.targets.wheel]
+packages = ["async_llm_handler"]
