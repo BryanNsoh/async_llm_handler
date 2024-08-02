@@ -1,7 +1,7 @@
 import os
 
 EXCLUDED_DIRS = {".git", "__pycache__", "node_modules", ".venv"}
-FULL_CONTENT_EXTENSIONS = {".py", ".txt", ".dbml", ".yaml", ".toml", ".md"}
+FULL_CONTENT_EXTENSIONS = {".py", ".txt", ".dbml", ".yaml", ".toml", ".md",".sh",".ps1", }
 
 def create_file_element(file_path, root_folder):
     relative_path = os.path.relpath(file_path, root_folder)
