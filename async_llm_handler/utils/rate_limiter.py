@@ -1,28 +1,19 @@
-# File: async_llm_handler/utils/rate_limiter.py
+# async_llm_handler/utils/rate_limiter.py
 
 import asyncio
 import time
 
+class RateLimitTimeoutError(Exception):
+    pass
+
 class RateLimiter:
-    def __init__(self, rate: int, period: int = 60):
+    def __init__(self, rate: int, period: int = 60, timeout: float = 30.0):
         self.rate = rate
         self.period = period
         self.allowance = rate
         self.last_check = time.monotonic()
+        self.timeout = timeout
         self._lock = asyncio.Lock()
-
-    def acquire(self):
-        current = time.monotonic()
-        time_passed = current - self.last_check
-        self.last_check = current
-        self.allowance += time_passed * (self.rate / self.period)
-        if self.allowance > self.rate:
-            self.allowance = self.rate
-        if self.allowance < 1:
-            time.sleep((1 - self.allowance) / (self.rate / self.period))
-            self.allowance = 0
-        else:
-            self.allowance -= 1
 
     async def acquire_async(self):
         async with self._lock:
@@ -33,8 +24,11 @@ class RateLimiter:
             if self.allowance > self.rate:
                 self.allowance = self.rate
             if self.allowance < 1:
-                await asyncio.sleep((1 - self.allowance) / (self.rate / self.period))
-                self.allowance = 0
+                wait_time = (1 - self.allowance) / (self.rate / self.period)
+                try:
+                    await asyncio.wait_for(asyncio.sleep(wait_time), timeout=self.timeout)
+                except asyncio.TimeoutError:
+                    raise RateLimitTimeoutError(f"Rate limit wait exceeded timeout of {self.timeout} seconds")
             else:
                 self.allowance -= 1
 

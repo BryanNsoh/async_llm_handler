@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "async_llm_handler"
-dynamic = ["version"]
+version = "0.2.0"
 description = "An asynchronous handler for multiple LLM APIs"
 readme = "README.md"
 requires-python = ">=3.7"
@@ -20,6 +20,7 @@ dependencies = [
   "python-dotenv",
   "tiktoken",
   "asyncio",
+  "aiohttp",
 ]
 
 [project.optional-dependencies]

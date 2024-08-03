@@ -1,10 +1,10 @@
 # Async LLM Handler
 
-Async LLM Handler is a Python package that provides a unified interface for interacting with multiple Language Model APIs, supporting both synchronous and asynchronous operations. It currently supports Gemini, Claude, and OpenAI APIs.
+Async LLM Handler is a Python package that provides a unified interface for interacting with multiple Language Model APIs asynchronously. It currently supports Gemini, Claude, and OpenAI APIs.
 
 ## Features
 
-- Synchronous and asynchronous API calls
+- Asynchronous API calls
 - Support for multiple LLM providers:
   - Gemini (model: gemini_flash)
   - Claude (models: claude_3_5_sonnet, claude_3_haiku)
@@ -34,37 +34,19 @@ OPENAI_API_KEY=your_openai_api_key
 
 ### Basic Usage
 
-#### Synchronous
-
-```python
-from async_llm_handler import LLMHandler
-
-handler = LLMHandler()
-
-# Using the default model
-response = handler.query("What is the capital of France?", sync=True)
-print(response)
-
-# Specifying a model
-response = handler.query("Explain quantum computing", model="gpt_4o", sync=True)
-print(response)
-```
-
-#### Asynchronous
-
 ```python
 import asyncio
-from async_llm_handler import LLMHandler
+from async_llm_handler import Handler
 
 async def main():
-    handler = LLMHandler()
+    handler = Handler()
 
     # Using the default model
-    response = await handler.query("What is the capital of France?", sync=False)
+    response = await handler.query("What is the capital of France?")
     print(response)
 
     # Specifying a model
-    response = await handler.query("Explain quantum computing", model="claude_3_5_sonnet", sync=False)
+    response = await handler.query("Explain quantum computing", model="claude_3_5_sonnet")
     print(response)
 
 asyncio.run(main())
@@ -76,16 +58,16 @@ asyncio.run(main())
 
 ```python
 import asyncio
-from async_llm_handler import LLMHandler
+from async_llm_handler import Handler
 
 async def main():
-    handler = LLMHandler()
+    handler = Handler()
     prompt = "Explain the theory of relativity"
     
     tasks = [
-        handler.query(prompt, model='gemini_flash', sync=False),
-        handler.query(prompt, model='gpt_4o', sync=False),
-        handler.query(prompt, model='claude_3_5_sonnet', sync=False)
+        handler.query(prompt, model='gemini_flash'),
+        handler.query(prompt, model='gpt_4o'),
+        handler.query(prompt, model='claude_3_5_sonnet')
     ]
     
     responses = await asyncio.gather(*tasks)
@@ -101,14 +83,18 @@ asyncio.run(main())
 #### Limiting Input and Output Tokens
 
 ```python
-from async_llm_handler import LLMHandler
+import asyncio
+from async_llm_handler import Handler
 
-handler = LLMHandler()
+async def main():
+    handler = Handler()
 
-long_prompt = "Provide a detailed explanation of the entire history of artificial intelligence, including all major milestones and breakthroughs."
+    long_prompt = "Provide a detailed explanation of the entire history of artificial intelligence, including all major milestones and breakthroughs."
 
-response = handler.query(long_prompt, model="gpt_4o", sync=True, max_input_tokens=1000, max_output_tokens=500)
-print(response)
+    response = await handler.query(long_prompt, model="gpt_4o", max_input_tokens=1000, max_output_tokens=500)
+    print(response)
+
+asyncio.run(main())
 ```
 
 ### Supported Models
@@ -133,16 +119,22 @@ You can specify these models using the `model` parameter in the `query` method.
 The package uses custom exceptions for error handling. Wrap your API calls in try-except blocks to handle potential errors:
 
 ```python
-from async_llm_handler import LLMHandler
-from async_llm_handler.exceptions import LLMAPIError
+import asyncio
+from async_llm_handler import Handler
+from async_llm_handler.exceptions import LLMAPIError, RateLimitTimeoutError
 
-handler = LLMHandler()
+async def main():
+    handler = Handler()
 
-try:
-    response = handler.query("What is the meaning of life?", model="gpt_4o", sync=True)
-    print(response)
-except LLMAPIError as e:
-    print(f"An error occurred: {e}")
+    try:
+        response = await handler.query("What is the meaning of life?", model="gpt_4o")
+        print(response)
+    except LLMAPIError as e:
+        print(f"An API error occurred: {e}")
+    except RateLimitTimeoutError as e:
+        print(f"Rate limit exceeded: {e}")
+
+asyncio.run(main())
 ```
 
 ### Rate Limiting
@@ -186,3 +178,13 @@ logging.basicConfig(level=logging.INFO)
 ```
 
 This will display INFO level logs and above from the Async LLM Handler.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License.
+
+

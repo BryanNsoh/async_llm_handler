@@ -1,7 +1,8 @@
-# File: async_llm_handler/__init__.py
+# async_llm_handler/__init__.py
 
-from async_llm_handler.handler import LLMHandler
-from async_llm_handler.config import Config
+from .handler import Handler
+from .config import Config
+from .exceptions import LLMAPIError, RateLimitTimeoutError
 
-__all__ = ['LLMHandler', 'Config']
-__version__ = "0.1.0"
+__all__ = ['Handler', 'Config', 'LLMAPIError', 'RateLimitTimeoutError']
+__version__ = "0.2.0"  # Updated version number to reflect the changes
