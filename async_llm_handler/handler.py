@@ -1,4 +1,4 @@
-# /src/utils/llm_api_handler.py
+# async_llm_handler/handler.py
 
 import os
 import json
@@ -59,7 +59,7 @@ class RetrySettings:
 
 class ModelLimits:
     """Rate limits and configurations for different models."""
-    LIMITS = {
+    DEFAULT_LIMITS = {
         'gpt-4o': {
             'rpm': 5000,
             'tpm': 800000,
@@ -80,12 +80,18 @@ class ModelLimits:
         }
     }
 
-    @classmethod
-    def get_model_limits(cls, model: str) -> Dict[str, int]:
+    def __init__(self, custom_limits: Optional[Dict[str, Dict[str, int]]] = None):
+        """Initialize model limits, allowing for custom user-defined limits."""
+        if custom_limits:
+            self.limits = custom_limits
+        else:
+            self.limits = self.DEFAULT_LIMITS
+
+    def get_model_limits(self, model: str) -> Dict[str, int]:
         """Retrieve limits for a specific model with validation."""
-        if model not in cls.LIMITS:
+        if model not in self.limits:
             raise ValueError(f"Unsupported model: {model}")
-        return cls.LIMITS[model]
+        return self.limits[model]
 
 class TokenEncoder:
     """Handles token encoding and estimation."""
@@ -94,15 +100,13 @@ class TokenEncoder:
     @lru_cache(maxsize=1000)
     def get_encoding(model: str) -> Any:
         """Get cached encoding for a model."""
-        # Validate model first
-        if model not in ModelLimits.LIMITS:
-            raise ValueError(f"Unsupported model: {model}")
-            
         encoding_map = {
             'gpt-4o': 'o200k_base',
             'gpt-4o-mini': 'o200k_base',
             'claude-3-5-sonnet-20241022': 'cl100k_base'
         }
+        if model not in encoding_map:
+            raise ValueError(f"Unsupported model: {model}")
         return tiktoken.get_encoding(encoding_map[model])
 
     @classmethod
@@ -111,6 +115,9 @@ class TokenEncoder:
         try:
             encoding = cls.get_encoding(model)
             return len(encoding.encode(text))
+        except ValueError as ve:
+            logger.warning(f"Token estimation failed for {model}: {str(ve)}")
+            raise
         except Exception as e:
             logger.warning(f"Token estimation failed for {model}: {str(e)}")
             return len(text.split()) * 2  # Fallback estimation
@@ -174,6 +181,10 @@ def async_retry(max_retries=RetrySettings.MAX_RETRIES):
                     await asyncio.sleep(wait_time)
                     backoff = min(backoff * 2, RetrySettings.MAX_BACKOFF)
 
+            # Increment failed_requests once after max retries
+            async with self.lock:
+                self._request_metrics['failed_requests'] += 1
+
             logger.error(f"Max retries ({max_retries}) exceeded. Last error: {last_error}")
             raise last_error
 
@@ -186,7 +197,7 @@ class LLMAPIHandler:
     rate limiting, and monitoring.
     """
 
-    def __init__(self, request_timeout: float = 30.0):
+    def __init__(self, request_timeout: float = 30.0, custom_rate_limits: Optional[Dict[str, Dict[str, int]]] = None):
         # Initialize clients with timeout
         self.openai_client = OpenAI(
             api_key=openai_api_key,
@@ -202,27 +213,30 @@ class LLMAPIHandler:
         self.async_anthropic_client = anthropic.AsyncAnthropic(
             api_key=anthropic_api_key
         )
-        
+
+        # Initialize model limits
+        self.model_limits = ModelLimits(custom_limits=custom_rate_limits)
+
         # Initialize rate limiters
         self.request_limiters = {
             model: AsyncLimiter(limits['rpm'], 60)
-            for model, limits in ModelLimits.LIMITS.items()
+            for model, limits in self.model_limits.limits.items()
         }
-        
+
         self.token_limiters = {
             model: AsyncLimiter(limits['tpm'], 60)
-            for model, limits in ModelLimits.LIMITS.items()
+            for model, limits in self.model_limits.limits.items()
         }
-        
+
         # Rate limit state management
         self._rate_limit_states = {
-            model: asyncio.Event() for model in ModelLimits.LIMITS
+            model: asyncio.Event() for model in self.model_limits.limits
         }
         for event in self._rate_limit_states.values():
             event.set()
-        
+
         self.lock = asyncio.Lock()
-        
+
         # Performance monitoring
         self._request_metrics = {
             'total_requests': 0,
@@ -254,12 +268,12 @@ class LLMAPIHandler:
                 message = str(exception)
                 match = re.search(r'Please try again in (\d+(?:\.\d+)?)s', message)
                 return float(match.group(1)) if match else RetrySettings.INITIAL_BACKOFF
-            
+
             if isinstance(exception, APIError):
                 retry_after = exception.headers.get('retry-after')
                 if retry_after:
                     return float(retry_after)
-            
+
             return RetrySettings.INITIAL_BACKOFF
         except:
             return RetrySettings.INITIAL_BACKOFF
@@ -281,11 +295,11 @@ class LLMAPIHandler:
         """Process a single request with enhanced monitoring and error handling."""
         start_time = time.perf_counter()
         model = request['model']
-        
+
         # Validate model first before any processing
-        if model not in ModelLimits.LIMITS:
+        if model not in self.model_limits.limits:
             raise ValueError(f"Unsupported model: {model}")
-            
+
         temperature = request.get('temperature', 0.7)
         prompt = request['prompt']
         system_message = self._get_system_message(
@@ -299,8 +313,8 @@ class LLMAPIHandler:
                 TokenEncoder.estimate_tokens(text, model)
                 for text in [prompt, system_message or "", ""]
             ])
-            
-            model_limits = ModelLimits.get_model_limits(model)
+
+            model_limits = self.model_limits.get_model_limits(model)
             if total_tokens > model_limits['context_window']:
                 raise ValueError(
                     f"Input exceeds model's context window of {model_limits['context_window']} tokens"
@@ -309,12 +323,12 @@ class LLMAPIHandler:
             # Wait for rate limit clearance
             if model in self._rate_limit_states:
                 await self._rate_limit_states[model].wait()
-            
+
             async with self.request_limiters[model]:
                 await self.token_limiters[model].acquire(total_tokens)
-                
+
                 logger.debug(f"Processing {model} request (est. tokens: {total_tokens})")
-                
+
                 if model.startswith('gpt-'):
                     response = await self._process_openai_request(
                         model, prompt, system_message, temperature, response_format
@@ -336,10 +350,7 @@ class LLMAPIHandler:
                 return response
 
         except Exception as e:
-            # Update failure metrics
-            async with self.lock:
-                self._request_metrics['total_requests'] += 1
-                self._request_metrics['failed_requests'] += 1
+            # Update failure metrics is now handled in the decorator
             raise
 
     async def _process_openai_request(self,
@@ -383,7 +394,7 @@ class LLMAPIHandler:
 
         message = await self.async_anthropic_client.messages.create(
             model=model,
-            max_tokens=ModelLimits.get_model_limits(model)['max_tokens'],
+            max_tokens=self.model_limits.get_model_limits(model)['max_tokens'],
             temperature=temperature,
             messages=[{"role": "user", "content": formatted_prompt}]
         )
@@ -392,6 +403,7 @@ class LLMAPIHandler:
         if response_format:
             return self._parse_json_response(content, response_format)
         return content
+
     def _parse_json_response(self, content: str, response_format: Type[T]) -> T:
         """Parse JSON response with enhanced error handling."""
         try:
@@ -401,14 +413,14 @@ class LLMAPIHandler:
             # Second attempt: extract JSON from text
             json_start = content.find('{')
             json_end = content.rfind('}') + 1
-            
+
             if json_start != -1 and json_end != -1:
                 try:
                     json_str = content[json_start:json_end]
                     return response_format(**json.loads(json_str))
                 except:
                     pass
-                    
+
             # Third attempt: try to fix common JSON issues
             try:
                 fixed_content = self._fix_json_content(content)
@@ -437,166 +449,239 @@ class LLMAPIHandler:
                      response_format: Optional[Type[T]] = None,
                      output_dir: Optional[str] = None,
                      update_interval: int = 60,
-                     deduplicate_prompts: bool = False,
-                     batch_size: int = 50) -> Union[Any, T, BatchResult[T]]:
+                     deduplicate_prompts: bool = False) -> Union[Any, T, BatchResult[T]]:
         """
         Main processing interface with enhanced batching and monitoring.
-        
+
         Args:
             prompts: Single prompt string or list of prompts
             model: Model identifier to use
             system_message: Optional system message for context
             temperature: Sampling temperature
-            mode: "regular" or "batch" processing mode
+            mode: "regular", "async_batch", or "openai_batch" processing mode
             response_format: Optional Pydantic model for response structure
             output_dir: Directory for batch processing outputs
             update_interval: Status update interval for batch processing
             deduplicate_prompts: Whether to remove duplicate prompts
-            batch_size: Size of batches for concurrent processing
-            
+
         Returns:
             Single response or BatchResult containing all responses
         """
         start_time = time.perf_counter()
-        
+
         try:
-            if isinstance(prompts, str):
-                # Single prompt processing
-                request = {
-                    "model": model,
-                    "prompt": prompts,
-                    "system_message": system_message,
-                    "temperature": temperature
-                }
-                return await self._async_process_regular(request, response_format)
-            
-            elif isinstance(prompts, list) and mode == "batch":
-                # Batch processing
+            if mode == "openai_batch":
+                # Official OpenAI Batch API processing
+                if not isinstance(prompts, list):
+                    raise ValueError("Prompts should be a list in 'openai_batch' mode.")
+
                 if deduplicate_prompts:
                     prompts = list(dict.fromkeys(prompts))
-                
-                total_prompts = len(prompts)
-                job_id = f"batch_{int(time.time())}_{model}"
-                
-                logger.info(f"Starting batch job {job_id} with {total_prompts} prompts")
-                
-                if output_dir:
-                    os.makedirs(output_dir, exist_ok=True)
-                
-                # Process in batches
+
+                batch_requests = self._construct_batch_requests(
+                    prompts, model, temperature, system_message, response_format
+                )
+
+                return await self._process_openai_batch(
+                    batch_requests, response_format, output_dir, update_interval, prompts
+                )
+
+            elif mode == "async_batch":
+                # Our own asynchronous batch processing
+                if not isinstance(prompts, list):
+                    raise ValueError("Prompts should be a list in 'async_batch' mode.")
+
+                if deduplicate_prompts:
+                    prompts = list(dict.fromkeys(prompts))
+
+                # Process asynchronously
+                batch_requests = [
+                    {
+                        "model": model,
+                        "prompt": prompt,
+                        "system_message": system_message,
+                        "temperature": temperature
+                    }
+                    for prompt in prompts
+                ]
+
+                batch_results = await asyncio.gather(
+                    *[self._async_process_regular(req, response_format) for req in batch_requests],
+                    return_exceptions=True
+                )
+
                 results = []
                 errors = []
-                
-                for i in range(0, total_prompts, batch_size):
-                    batch_prompts = prompts[i:i + batch_size]
-                    batch_requests = [
-                        {
-                            "model": model,
-                            "prompt": prompt,
-                            "system_message": system_message,
-                            "temperature": temperature
-                        }
-                        for prompt in batch_prompts
-                    ]
-                    
-                    # Process batch concurrently
-                    batch_results = await asyncio.gather(
-                        *[self._async_process_regular(req, response_format) 
-                          for req in batch_requests],
-                        return_exceptions=True
-                    )
-                    
-                    # Process results and track errors
-                    for prompt, result in zip(batch_prompts, batch_results):
-                        if isinstance(result, Exception):
-                            errors.append({
-                                "prompt": prompt,
-                                "error": str(result)
-                            })
-                        else:
-                            results.append({
-                                "prompt": prompt,
-                                "response": result
-                            })
-                    
-                    # Progress update
-                    processed = len(results) + len(errors)
-                    logger.info(f"Processed {processed}/{total_prompts} prompts "
-                              f"({len(errors)} errors)")
-                    
-                    if output_dir:
-                        self._save_batch_progress(
-                            output_dir,
-                            job_id,
-                            results,
-                            errors,
-                            processed,
-                            total_prompts
-                        )
-                
-                # Final batch result
+                for prompt, result in zip(prompts, batch_results):
+                    if isinstance(result, Exception):
+                        errors.append({"prompt": prompt, "error": str(result)})
+                    else:
+                        results.append({"prompt": prompt, "response": result})
+
                 metadata = {
-                    "job_id": job_id,
                     "model": model,
-                    "total_prompts": total_prompts,
+                    "total_prompts": len(prompts),
                     "successful_prompts": len(results),
                     "failed_prompts": len(errors),
                     "processing_time": time.perf_counter() - start_time,
                     "errors": errors
                 }
-                
-                if output_dir:
-                    self._save_batch_results(output_dir, job_id, metadata, results)
-                
+
                 return BatchResult(
                     metadata=metadata,
                     results=results,
                     error_count=len(errors),
                     success_count=len(results)
                 )
-            
+
+            elif mode == "regular":
+                if isinstance(prompts, str):
+                    # Single prompt processing
+                    request = {
+                        "model": model,
+                        "prompt": prompts,
+                        "system_message": system_message,
+                        "temperature": temperature
+                    }
+                    return await self._async_process_regular(request, response_format)
+                else:
+                    raise ValueError(
+                        "In 'regular' mode, 'prompts' should be a single string."
+                    )
+
             else:
-                raise ValueError(
-                    "Invalid input: 'prompts' should be a string for regular mode "
-                    "or a list for batch mode"
-                )
-                
+                raise ValueError(f"Invalid mode: {mode}")
+
         except Exception as e:
             logger.error(f"Processing failed: {str(e)}")
             raise
 
-    def _save_batch_progress(self,
-                           output_dir: str,
-                           job_id: str,
-                           results: List[Dict],
-                           errors: List[Dict],
-                           processed: int,
-                           total: int):
-        """Save batch processing progress to disk."""
-        progress_file = os.path.join(output_dir, f"{job_id}_progress.json")
-        progress_data = {
-            "processed": processed,
-            "total": total,
-            "success_count": len(results),
-            "error_count": len(errors),
-            "last_updated": datetime.now().isoformat()
-        }
-        
-        with open(progress_file, 'w') as f:
-            json.dump(progress_data, f, indent=2)
+    def _construct_batch_requests(self, prompts: List[str], model: str, temperature: float,
+                                  system_message: Optional[str], response_format: Optional[Type[T]]) -> List[Dict[str, Any]]:
+        """Construct a list of batch requests for OpenAI Batch API."""
+        batch_requests = []
+        for i, prompt in enumerate(prompts):
+            messages = [{"role": "user", "content": prompt}]
+            if system_message:
+                messages.insert(0, {"role": "system", "content": system_message})
 
-    def _save_batch_results(self,
-                          output_dir: str,
-                          job_id: str,
-                          metadata: Dict,
-                          results: List[Dict]):
-        """Save final batch results to disk."""
-        results_file = os.path.join(output_dir, f"{job_id}_results.json")
-        with open(results_file, 'w') as f:
-            json.dump({
-                "metadata": metadata,
-                "results": results
-            }, f, indent=2)
+            if response_format:
+                schema = response_format.model_json_schema()
+                messages.insert(0, {"role": "system", "content": f"Answer exclusively in this JSON format: {schema}"})
+
+            batch_requests.append({
+                "custom_id": f"request_{i+1}",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature
+                }
+            })
+        return batch_requests
+
+    async def _process_openai_batch(self, requests: List[Dict[str, Any]], response_format: Optional[Type[T]],
+                                    output_dir: Optional[str], update_interval: int, original_prompts: List[str]) -> BatchResult[T]:
+        """Process a batch of requests using the OpenAI Batch API."""
+        if not output_dir:
+            output_dir = "batch_output"
+        os.makedirs(output_dir, exist_ok=True)
+
+        batch_file_path = os.path.join(output_dir, 'batch_input.jsonl')
+        with open(batch_file_path, 'w') as f:
+            for request in requests:
+                f.write(json.dumps(request) + '\n')
+
+        with open(batch_file_path, 'rb') as f:
+            batch_file = self.openai_client.files.create(file=f, purpose="batch")
+
+        batch = self.openai_client.batches.create(
+            input_file_id=batch_file.id,
+            endpoint="/v1/chat/completions",
+            completion_window="24h"
+        )
+
+        job_metadata = {
+            "batch_id": batch.id,
+            "input_file_id": batch.input_file_id,
+            "status": batch.status,
+            "created_at": batch.created_at,
+            "last_updated": datetime.now().isoformat(),
+            "num_requests": len(requests)
+        }
+
+        metadata_file_path = os.path.join(output_dir, f"batch_{batch.id}_metadata.json")
+        with open(metadata_file_path, 'w') as f:
+            json.dump(job_metadata, f, indent=2)
+
+        start_time = time.time()
+        while True:
+            current_time = time.time()
+            if current_time - start_time >= update_interval:
+                batch = self.openai_client.batches.retrieve(batch.id)
+                job_metadata.update({
+                    "status": batch.status,
+                    "last_updated": datetime.now().isoformat()
+                })
+                with open(metadata_file_path, 'w') as f:
+                    json.dump(job_metadata, f, indent=2)
+                logger.info(f"Batch status: {batch.status}")
+                start_time = current_time
+
+            if batch.status == "completed":
+                logger.info("Batch processing completed!")
+                break
+            elif batch.status in ["failed", "canceled"]:
+                logger.error(f"Batch processing {batch.status}.")
+                job_metadata["error"] = f"Batch processing {batch.status}"
+                with open(metadata_file_path, 'w') as f:
+                    json.dump(job_metadata, f, indent=2)
+                return BatchResult(metadata=job_metadata, results=[])
+
+            await asyncio.sleep(10)
+
+        output_file_path = os.path.join(output_dir, f"batch_{batch.id}_output.jsonl")
+        file_response = self.openai_client.files.content(batch.output_file_id)
+        with open(output_file_path, "w") as output_file:
+            output_file.write(file_response.text)
+
+        job_metadata.update({
+            "status": "completed",
+            "last_updated": datetime.now().isoformat(),
+            "output_file_path": output_file_path
+        })
+        with open(metadata_file_path, 'w') as f:
+            json.dump(job_metadata, f, indent=2)
+
+        results = []
+        with open(output_file_path, 'r') as f:
+            for line, original_prompt in zip(f, original_prompts):
+                response = json.loads(line)
+                body = response['response']['body']
+                choices = body.get('choices', [])
+
+                if len(choices) > 0:
+                    content = choices[0]['message']['content']
+
+                    if response_format:
+                        try:
+                            result = response_format(**json.loads(content))
+                            results.append({
+                                "prompt": original_prompt,
+                                "response": result
+                            })
+                        except json.JSONDecodeError:
+                            logger.error(f"Failed to parse JSON response for prompt: {original_prompt}")
+                    else:
+                        results.append({
+                            "prompt": original_prompt,
+                            "response": content
+                        })
+                else:
+                    logger.error(f"Unexpected response format: {response}")
+
+        return BatchResult(metadata=job_metadata, results=results)
 
     async def get_metrics(self) -> Dict[str, Any]:
         """Get current performance metrics."""
@@ -609,13 +694,13 @@ class LLMAPIHandler:
                 )
             else:
                 metrics['average_processing_time'] = 0.0
-                
+
             metrics['success_rate'] = (
                 metrics['successful_requests'] / 
                 metrics['total_requests']
                 if metrics['total_requests'] > 0 else 0.0
             )
-            
+
             return metrics
 
     async def reset_metrics(self):
@@ -628,6 +713,3 @@ class LLMAPIHandler:
                 'total_tokens': 0,
                 'total_processing_time': 0.0
             }
-            
-            
-            

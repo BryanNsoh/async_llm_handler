@@ -1,4 +1,6 @@
-from typing import List, Dict, Any, Optional
+# tests/test_models.py
+
+from typing import List, Dict, Any
 from pydantic import BaseModel, Field
 
 class CompletionMetadata(BaseModel):
@@ -26,7 +28,7 @@ class StructuredOutput(BaseModel):
 
 class BatchMetadata(BaseModel):
     """Batch processing metadata"""
-    job_id: str = Field(description="Unique job identifier")
+    batch_id: str = Field(description="Unique batch identifier")
     model: str = Field(description="Model used")
     total_prompts: int = Field(description="Total number of prompts")
     successful_prompts: int = Field(description="Number of successful prompts")
