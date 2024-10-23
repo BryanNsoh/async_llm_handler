@@ -1,0 +1,6 @@
+﻿openai
+anthropic
+aiolimiter
+tiktoken
+pydantic
+python-dotenv
