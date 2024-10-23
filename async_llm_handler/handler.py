@@ -307,6 +307,10 @@ class LLMAPIHandler:
             response_format
         )
 
+        # Validate prompt
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("Prompt must be a non-empty string in 'regular' mode.")
+
         try:
             # Token estimation after model validation
             total_tokens = sum([
@@ -470,6 +474,12 @@ class LLMAPIHandler:
         start_time = time.perf_counter()
 
         try:
+            # Validate model
+            if model not in self.model_limits.limits:
+                async with self.lock:
+                    self._request_metrics['failed_requests'] += 1
+                raise ValueError(f"Unsupported model: {model}")
+
             if mode == "openai_batch":
                 # Official OpenAI Batch API processing
                 if not isinstance(prompts, list):
@@ -477,6 +487,11 @@ class LLMAPIHandler:
 
                 if deduplicate_prompts:
                     prompts = list(dict.fromkeys(prompts))
+
+                if not prompts:
+                    async with self.lock:
+                        self._request_metrics['failed_requests'] += 1
+                    raise ValueError("Prompt list is empty.")
 
                 batch_requests = self._construct_batch_requests(
                     prompts, model, temperature, system_message, response_format
@@ -493,6 +508,16 @@ class LLMAPIHandler:
 
                 if deduplicate_prompts:
                     prompts = list(dict.fromkeys(prompts))
+
+                if not prompts:
+                    async with self.lock:
+                        self._request_metrics['failed_requests'] += 1
+                    raise ValueError("Prompt list is empty.")
+
+                # Validate each prompt
+                for prompt in prompts:
+                    if not isinstance(prompt, str) or not prompt.strip():
+                        raise ValueError("Each prompt must be a non-empty string in 'async_batch' mode.")
 
                 # Process asynchronously
                 batch_requests = [
@@ -535,19 +560,20 @@ class LLMAPIHandler:
                 )
 
             elif mode == "regular":
-                if isinstance(prompts, str):
-                    # Single prompt processing
-                    request = {
-                        "model": model,
-                        "prompt": prompts,
-                        "system_message": system_message,
-                        "temperature": temperature
-                    }
-                    return await self._async_process_regular(request, response_format)
-                else:
-                    raise ValueError(
-                        "In 'regular' mode, 'prompts' should be a single string."
-                    )
+                if not isinstance(prompts, str):
+                    raise ValueError("In 'regular' mode, 'prompts' should be a single string.")
+
+                if not prompts.strip():
+                    raise ValueError("Prompt must be a non-empty string in 'regular' mode.")
+
+                # Single prompt processing
+                request = {
+                    "model": model,
+                    "prompt": prompts,
+                    "system_message": system_message,
+                    "temperature": temperature
+                }
+                return await self._async_process_regular(request, response_format)
 
             else:
                 raise ValueError(f"Invalid mode: {mode}")
@@ -561,6 +587,9 @@ class LLMAPIHandler:
         """Construct a list of batch requests for OpenAI Batch API."""
         batch_requests = []
         for i, prompt in enumerate(prompts):
+            if not isinstance(prompt, str) or not prompt.strip():
+                raise ValueError("Each prompt must be a non-empty string in 'openai_batch' mode.")
+
             messages = [{"role": "user", "content": prompt}]
             if system_message:
                 messages.insert(0, {"role": "system", "content": system_message})
