@@ -25,7 +25,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-load_dotenv()
+load_dotenv(override=True)
 
 openai_api_key = os.getenv("OPENAI_API_KEY")
 anthropic_api_key = os.getenv("CLAUDE_API_KEY")
